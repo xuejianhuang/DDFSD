@@ -1,67 +1,82 @@
 # DDFSD: Dual-Domain Prototypical Learning for Few-Shot AI-Generated Image Detection
 
 <p align="center">
-  <a href="https://github.com/zenghao0718/Dual-Domain-Few-Shot-AIGI-Detector/stargazers"><img src="https://img.shields.io/github/stars/zenghao0718/Dual-Domain-Few-Shot-AIGI-Detector?style=flat-square" alt="GitHub Stars"></a>
+  <a href="https://github.com/xuejianhuang/DDFSD/stargazers"><img src="https://img.shields.io/github/stars/xuejianhuang/DDFSD?style=flat-square" alt="GitHub Stars"></a>
   <img src="https://img.shields.io/badge/Python-3.10-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10">
   <img src="https://img.shields.io/badge/PyTorch-%E2%89%A52.3.0-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch >= 2.3.0">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square" alt="Apache-2.0 License"></a>
 </p>
 
----
-
-## Overview
-
-This repository provides the implementation of DDFSD, a few-shot detector for identifying AI-generated images from an unseen target generator. DDFSD learns dual-domain prototype spaces from RGB content and signed high-frequency Haar-DWT responses. Class-specific adaptive weights fuse the two domains according to support-set dispersion, allowing the more reliable domain to contribute more strongly to each class decision.
-
-During episodic training, an asymmetric prototype margin strengthens real-fake separation while preserving structure between fake-generator classes. At test time, the encoders remain frozen: real and fake prototypes are built directly from the target support set, and the remaining target images are classified without gradient updates on the target generator.
+This repository provides the released DDFSD code, experiment wrappers, and pretrained artifacts. Given a small collection of labeled real and synthetic examples for a generator excluded from training, the evaluation program assembles a task-specific detector and applies it to the remaining images.
 
 <p align="center">
   <img src="./figs/ddfsd_framework.png" width="95%" alt="DDFSD framework">
 </p>
-<p align="center"><em>Fig. 1: Overall framework of DDFSD.</em></p>
+<p align="center"><em>Fig. 1. Training and few-shot testing workflow implemented in this repository.</em></p>
 
 ---
 
-## Repository Structure
+## Implementation at a Glance
 
-```text
-Dual-Domain-Few-Shot-AIGI-Detector/
-|-- datasets/
-|   `-- ddfsd_datasets.py          # GenImage loading, transforms, and data iterators
-|-- figs/
-|   `-- ddfsd_framework.png        # DDFSD framework figure
-|-- model/
-|   |-- ddfsd.py                   # RGB/frequency encoders and projection heads
-|   `-- ddfsd_losses.py            # Prototype, fusion, and margin objectives
-|-- scripts/
-|   |-- train_main.sh              # Train one leave-one-generator-out task
-|   |-- eval_main.sh               # Evaluate one trained task
-|   `-- run_main_experiment.sh     # Run all leave-one-out tasks
-|-- tests/
-|   `-- test_ddfsd_core.py         # Core unit tests
-|-- util/                          # Evaluation, frequency, sampling, and logging helpers
-|-- train_ddfsd.py                 # Training entry point
-|-- test_ddfsd.py                  # Formal evaluation entry point
-|-- requirements.txt
-|-- LICENSE
-`-- README.md
+Every sample is converted into two spatially aligned tensors before feature extraction:
+
+- an RGB view for image-level visual content;
+- a frequency view formed from the signed `LH`, `HL`, and `HH` Haar-DWT bands of the luminance channel.
+
+The main pipeline follows the module naming used in the project:
+
+| Module | Repository behavior |
+| --- | --- |
+| **Dual-domain input construction** | Applies a shared spatial transform, then derives the RGB tensor and the luminance-wavelet tensor. |
+| **Dual-domain encoding** | Uses independent RGB and frequency backbones with projection heads. |
+| **Dual-domain prototypes** | Computes one support centroid per class and per encoder branch. |
+| **Support-set reliability estimation** | Computes each branch's average squared deviation around its class centroid. |
+| **Dual-domain distance fusion** | Converts the support statistics into class-dependent mixing weights for query-to-prototype distances. |
+| **Few-shot testing** | Initializes the real/fake decision rule from support examples; target-task execution uses forward passes only. |
+
+The episode sampler selects three source labels at a time: `real` and two generator IDs. Optimization combines query classification with a pairwise prototype penalty whose real--fake and fake--fake margins are configured separately.
+
+---
+
+## Quick Start
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/xuejianhuang/DDFSD.git
+cd DDFSD
 ```
 
----
+### 2. Create an environment
 
-## Dataset
+```bash
+python -m venv .venv
+```
 
-The main protocol uses **GenImage** with the following seven project-level categories:
+Activate it on Linux or macOS:
 
-- `real`
-- `ADM`
-- `BigGAN`
-- `glide`
-- `Midjourney`
-- `SD`
-- `VQDM`
+```bash
+source .venv/bin/activate
+```
 
-`SD` is the merged Stable Diffusion category used by this project. `DATA_ROOT` must point directly to the `GenImage` directory that contains all seven category directories:
+Activate it in Windows PowerShell:
+
+```powershell
+.venv\Scripts\activate
+```
+
+Install the dependencies:
+
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+A CUDA-enabled PyTorch build should be installed separately when the default package does not match the local CUDA runtime.
+
+### 3. Prepare GenImage
+
+Set `DATA_ROOT` to the directory that directly contains the seven project-level categories:
 
 ```text
 GenImage/
@@ -88,100 +103,53 @@ GenImage/
     `-- val/
 ```
 
-GenImage is not included in this repository. The repository also does not currently provide a complete utility for automatically converting the original GenImage release into this seven-category layout; users must prepare the data accordingly.
+The dataset can be obtained from the [GenImage project page](https://genimage-dataset.github.io/). Dataset files are not distributed with this repository.
 
----
+> **Data-layout note:** `SD` denotes the merged Stable Diffusion category used by this codebase. An end-to-end conversion script from the original GenImage release to the layout above is not currently included.
 
-## Compared Methods
-
-The accompanying study compares DDFSD with eight representative AI-generated image detection methods covering different forensic domains and learning paradigms.
-
-### Spatial-domain detectors
-
-- **CNNSpot** learns transferable generation artifacts directly from RGB images using a convolutional classifier and generalization-oriented augmentation strategies.
-- **NPR** models neighboring-pixel relationships to expose local structural traces introduced by upsampling operations in generative networks.
-
-### Frequency-aware detector
-
-- **FreqNet** performs frequency-aware modeling at both the image and intermediate-feature levels, explicitly exploiting frequency-domain cues including amplitude- and phase-related evidence.
-
-### Spatial-frequency and foundation-model-based detectors
-
-- **FatFormer** combines local spatial forgery traces with wavelet-frequency evidence in a pretrained vision-language framework.
-- **UnivFD** uses frozen CLIP representations with a lightweight classifier to reduce overfitting to artifacts from specific generators.
-- **VIB-Net** uses a variational information bottleneck to retain authenticity-relevant evidence while suppressing semantic information unrelated to the detection task.
-
-### Few-shot detectors
-
-- **FSD** learns a prototypical metric space in a single RGB domain through episodic training. It builds prototypes from a small support set for the target generator and performs inference without test-time gradient updates. DDFSD extends this paradigm with dual-domain prototypes, support-set reliability estimation, and an asymmetric prototype-margin constraint.
-- **LIDA** extracts generation fingerprints from low bit planes and combines few-shot adaptation with similarity retrieval and detection.
-
----
-
-## Environment
-
-| Item | Recommended setting |
-| --- | --- |
-| Python | Python 3.10 |
-| PyTorch | `torch>=2.3.0`, as specified in `requirements.txt` |
-| GPU | CUDA-capable GPU with a compatible PyTorch build |
-| Execution | Single GPU; the training wrapper uses `torchrun --nproc_per_node 1` |
-
-Core dependencies are:
-
-```text
-torch>=2.3.0
-torchvision
-timm
-numpy
-Pillow
-scikit-learn
-tensorboard
-```
-
-The shell wrappers require Bash. No specific GPU model or fixed VRAM capacity is required by the repository.
-
----
-
-## Installation
+### 4. Train one held-out-generator task
 
 ```bash
-git clone https://github.com/zenghao0718/Dual-Domain-Few-Shot-AIGI-Detector.git
-cd Dual-Domain-Few-Shot-AIGI-Detector
-
-python -m venv .venv
+DATA_ROOT=/path/to/GenImage \
+EXCLUDE_CLASS=ADM \
+bash scripts/train_main.sh
 ```
 
-Activate the environment on Windows PowerShell:
+Valid values of `EXCLUDE_CLASS` are `ADM`, `BigGAN`, `glide`, `Midjourney`, `SD`, and `VQDM`.
 
-```powershell
-.venv\Scripts\activate
-```
-
-Or on Linux/macOS:
+### 5. Evaluate the trained task
 
 ```bash
-source .venv/bin/activate
+DATA_ROOT=/path/to/GenImage \
+EXCLUDE_CLASS=ADM \
+bash scripts/eval_main.sh
 ```
 
-Then install the dependencies:
+The default evaluation preset loads the step-15,000 checkpoint, performs 10-shot testing with seeds `42, 101, 102, 103, 104`, uses all remaining validation images as queries, and reports ACC, AP, and AUC.
+
+### 6. Run the complete six-task protocol
 
 ```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+MODE=all \
+DATA_ROOT=/path/to/GenImage \
+bash scripts/run_main_experiment.sh
 ```
 
-If the default PyTorch package does not match your CUDA runtime, install the appropriate CUDA-enabled PyTorch build for your system before installing the remaining requirements.
+Available modes are:
+
+- `MODE=train`: train all six tasks;
+- `MODE=eval`: evaluate existing runs;
+- `MODE=all`: train first and evaluate afterward.
+
+The task order is `ADM`, `BigGAN`, `glide`, `Midjourney`, `SD`, and `VQDM`. Execution stops when a task returns an error.
 
 ---
 
-## Checkpoints
+## Pretrained Checkpoints
 
-Pretrained checkpoints can be downloaded from:
+Pretrained models are available from [Baidu Netdisk](https://pan.baidu.com/s/1YmL59_hJIIguExwbGzEbQA?pwd=vuuy).
 
-- [Baidu Netdisk](https://pan.baidu.com/s/1YmL59_hJIIguExwbGzEbQA?pwd=vuuy)
-
-After extracting the downloaded ZIP archive, the package has the following structure:
+After extraction, the package should have the following form:
 
 ```text
 DDFSD_pretrained/
@@ -208,51 +176,15 @@ DDFSD_pretrained/
 `-- README.txt
 ```
 
-Each `exclude_<CLASS>` directory represents one leave-one-generator-out task. Its `ddfsd_step[15000].pth` file is the main-experiment checkpoint, and its `freq_stats.pt` file contains the frequency-domain mean and standard deviation computed from that task's training split. These two files must always be used as a matched pair from the same directory; never combine a checkpoint from one held-out class with frequency statistics from another. Formal evaluation must not recompute frequency statistics from validation or test data.
+A checkpoint and its `freq_stats.pt` file form a task-specific pair. Both files must come from the same `exclude_<CLASS>` directory. Mixing artifacts from different held-out-generator tasks changes the frequency normalization and produces an invalid evaluation setup.
 
-`MANIFEST.csv` records artifact provenance and verification information, `SHA256SUMS.txt` provides integrity checksums, and `README.txt` contains concise instructions for using the package.
+The package also provides:
 
----
+- `MANIFEST.csv` for artifact metadata;
+- `SHA256SUMS.txt` for integrity verification;
+- `README.txt` for checkpoint-specific usage notes.
 
-## Data Preparation
-
-Set the dataset root before running an experiment:
-
-```bash
-DATA_ROOT=/path/to/GenImage
-```
-
-`DATA_ROOT` must be the directory that directly contains `real`, `ADM`, `BigGAN`, `glide`, `Midjourney`, `SD`, and `VQDM`.
-
-For a training task, the training script computes the frequency-domain mean and standard deviation from the training split of `real` and the five non-excluded fake classes, then saves them as `freq_stats.pt`. Formal evaluation must load the statistics produced by the corresponding training task; it must not estimate them again from validation or test images.
-
----
-
-## Running DDFSD
-
-### 1. Train One Leave-One-Generator-Out Task
-
-```bash
-DATA_ROOT=/path/to/GenImage \
-EXCLUDE_CLASS=ADM \
-bash scripts/train_main.sh
-```
-
-`EXCLUDE_CLASS` supports `ADM`, `BigGAN`, `glide`, `Midjourney`, `SD`, and `VQDM`. Training refuses to reuse an output directory that already contains checkpoints.
-
-### 2. Evaluate One Task
-
-```bash
-DATA_ROOT=/path/to/GenImage \
-EXCLUDE_CLASS=ADM \
-bash scripts/eval_main.sh
-```
-
-By default, evaluation loads the step-15000 checkpoint and its matching `freq_stats.pt`. It performs 10-shot evaluation with seeds `42, 101, 102, 103, 104`, uses the complete remaining validation set as queries, and reports ACC, AP, and AUC. The published main protocol uses both branches with support-dependent adaptive fusion.
-
-Set `RUN_ROOT`, `RUN_DIR`, `CKPT_PATH`, `FREQ_STATS_PATH`, or `OUTPUT_DIR` explicitly when the files are stored outside the default run layout.
-
-#### Evaluate with Downloaded Checkpoints
+### Evaluate a downloaded checkpoint
 
 ```bash
 DATA_ROOT=/path/to/GenImage \
@@ -263,54 +195,55 @@ OUTPUT_DIR='/path/to/results/exclude_ADM' \
 bash scripts/eval_main.sh
 ```
 
-Replace `ADM` with the desired held-out generator and use the checkpoint and frequency statistics from the same `exclude_<CLASS>` directory. The quoted checkpoint path is required because the filename contains square brackets.
-
-### 3. Run All Six Leave-One-Out Tasks
-
-```bash
-MODE=all \
-DATA_ROOT=/path/to/GenImage \
-bash scripts/run_main_experiment.sh
-```
-
-The driver supports:
-
-- `MODE=train` for training only
-- `MODE=eval` for evaluation only
-- `MODE=all` for training followed by evaluation
-
-The six tasks run in the order `ADM`, `BigGAN`, `glide`, `Midjourney`, `SD`, and `VQDM`. The driver stops if any task fails.
+Keep the checkpoint path quoted because its filename contains square brackets. Custom run layouts can also be specified through `RUN_ROOT`, `RUN_DIR`, `CKPT_PATH`, `FREQ_STATS_PATH`, and `OUTPUT_DIR`.
 
 ---
 
-## Main Configuration
+## Reproducibility Notes
 
-| Item | Main setting |
+Frequency normalization is task-dependent. During training, the code estimates the frequency-domain mean and standard deviation using the training split of `real` and the five non-excluded fake classes, then stores the result in `freq_stats.pt`.
+
+For formal evaluation:
+
+1. load the statistics saved by the matching training task;
+2. do not estimate new statistics from validation or test images;
+3. keep the held-out generator consistent across `EXCLUDE_CLASS`, the checkpoint, and `freq_stats.pt`;
+4. use the dual-branch adaptive-fusion setting for the main protocol.
+
+The training wrapper uses a single process through `torchrun --nproc_per_node 1`. Bash is required for the supplied shell scripts.
+
+---
+
+## Main Experiment Preset
+
+| Item | Setting |
 | --- | --- |
-| Data | Full GenImage |
-| Protocol | Six-class leave-one-generator-out |
-| Training | 15,000 steps; batch size 16; single GPU |
-| Episode | 3-way: real + 2 fake classes |
-| Episode samples | 5 support + 5 query images per class during training |
+| Dataset | GenImage |
+| Evaluation design | Six held-out-generator tasks |
+| Training length | 15,000 steps |
+| Batch size | 16 |
+| Training episode | 3-way: one real class and two fake classes |
+| Samples per episodic class | 5 support and 5 query images |
 | RGB encoder | ResNet-50 |
 | Frequency encoder | ResNet-18 |
-| Embedding dimension | 512 |
-| Frequency input | Signed Haar-DWT `LH`, `HL`, and `HH` bands from the Y channel |
-| Scheduler | StepLR; step size 5,000; gamma 0.5 |
-| Learning rates | Backbone `3e-5`; projection head `1e-4` for both domains |
-| Prototype margins | `m_rf=1.2`; `m_ff=0.6`; `lambda_ff=0.5` |
-| Separation weight | Target `lambda_sep=0.03`; linear warmup from step 2,500 to 7,500 |
-| Branch dropout | Dual/RGB-only/frequency-only: `0.90 / 0.05 / 0.05` |
-| Formal evaluation | Step 15,000; 10-shot; 5 seeds; full validation query set |
-| Metrics | ACC / AP / AUC |
+| Embedding size | 512 |
+| Frequency representation | Signed Haar-DWT `LH`, `HL`, and `HH` bands from the Y channel |
+| Optimizer schedule | StepLR, step size 5,000, gamma 0.5 |
+| Backbone learning rate | `3e-5` |
+| Projection-head learning rate | `1e-4` for both domains |
+| Margin parameters | `m_rf=1.2`, `m_ff=0.6`, `lambda_ff=0.5` |
+| Separation-loss weight | `lambda_sep=0.03` after linear warmup from steps 2,500 to 7,500 |
+| Branch sampling | Dual/RGB-only/frequency-only = `0.90 / 0.05 / 0.05` |
+| Formal test preset | Step 15,000; 10-shot; 5 seeds; full validation query set |
+| Reported metrics | ACC, AP, and AUC |
 
-This table describes the runtime configuration, not experimental results.
+These values describe the released execution preset rather than a summary of experimental results.
 
 ---
 
-## Output Structure
+## Output Files
 
-With the default experiment name, outputs are written outside the repository in the following layout:
+The default scripts write task outputs outside the repository:
 
 ```text
 <run_root>/
@@ -335,15 +268,17 @@ With the default experiment name, outputs are written outside the repository in 
             `-- eval.log
 ```
 
-The driver logs are created by `run_main_experiment.sh`; timestamped logger files are created by the Python entry points.
+Key evaluation artifacts are:
 
----
+| File | Content |
+| --- | --- |
+| `ddfsd_eval_per_seed.csv` | Metrics for each evaluation seed |
+| `ddfsd_eval_summary.csv` | Mean and standard deviation across seeds |
+| `formal_val_invalid_images.csv` | Validation-image audit results |
+| `config.json` | Resolved paths and protocol settings |
+| `eval.log` | Console output from formal evaluation |
 
-## Evaluation
-
-Formal evaluation writes per-seed metrics to `ddfsd_eval_per_seed.csv`, aggregate mean and standard-deviation metrics to `ddfsd_eval_summary.csv`, the resolved protocol and paths to `config.json`, and console output to `eval.log`. It also audits the exact validation images before inference and records the audit in `formal_val_invalid_images.csv`.
-
-TensorBoard events are stored under each task's `tb/` directory. Launch TensorBoard with a generic run root:
+TensorBoard events are stored in the task-level `tb/` directory:
 
 ```bash
 tensorboard --logdir /path/to/run_root/main_full_steps15000 --host 0.0.0.0 --port 6006
@@ -351,6 +286,71 @@ tensorboard --logdir /path/to/run_root/main_full_steps15000 --host 0.0.0.0 --por
 
 ---
 
+## Repository Layout
+
+```text
+DDFSD/
+|-- datasets/
+|   `-- ddfsd_datasets.py          # GenImage parsing, transforms, and iterators
+|-- figs/
+|   `-- ddfsd_framework.png        # Framework illustration
+|-- model/
+|   |-- ddfsd.py                   # Encoders and projection heads
+|   `-- ddfsd_losses.py            # Prototype, fusion, and margin losses
+|-- scripts/
+|   |-- train_main.sh              # Train one held-out-generator task
+|   |-- eval_main.sh               # Evaluate one task
+|   `-- run_main_experiment.sh     # Execute all six tasks
+|-- tests/
+|   `-- test_ddfsd_core.py         # Core implementation tests
+|-- util/                          # Sampling, frequency, logging, and evaluation utilities
+|-- train_ddfsd.py                 # Python training entry point
+|-- test_ddfsd.py                  # Python evaluation entry point
+|-- requirements.txt
+|-- LICENSE
+`-- README.md
+```
+
+---
+
+## Reference Implementations Used for Comparison
+
+The experimental study includes the following external detectors. Their source code and licenses are maintained by the respective authors.
+
+| Category | Methods |
+| --- | --- |
+| Spatial-domain detection | [CNNSpot](https://github.com/PeterWang512/CNNDetection), [NPR](https://github.com/chuangchuangtan/NPR-DeepfakeDetection) |
+| Frequency-domain detection | [FreqNet](https://github.com/chuangchuangtan/FreqNet-DeepfakeDetection) |
+| Spatial-frequency or foundation-model-based detection | [FatFormer](https://github.com/Michel-liu/FatFormer), [UnivFD](https://github.com/WisconsinAIVision/UniversalFakeDetect), [VIB-Net](https://github.com/oceanzhf/VIBAIGCDetect) |
+| Few-shot detection | [FSD](https://github.com/teheperinko541/Few-Shot-AIGI-Detector), [LIDA](https://github.com/hongsong-wang/LIDA) |
+
+These external repositories are not bundled with DDFSD.
+
+---
+
+## Environment Summary
+
+| Component | Requirement |
+| --- | --- |
+| Python | 3.10 |
+| PyTorch | `torch>=2.3.0` |
+| Hardware | CUDA-capable GPU with a compatible PyTorch build |
+| Execution mode | Single GPU |
+
+Core Python packages include:
+
+```text
+torch>=2.3.0
+torchvision
+timm
+numpy
+Pillow
+scikit-learn
+tensorboard
+```
+
+---
+
 ## Acknowledgements
 
-We thank the authors of FSD (Few-Shot Learner Generalizes Across AI-Generated Image Detection) for releasing their work and code, which provided the foundation for this project.
+We thank the authors of **FSD: Few-Shot Learner Generalizes Across AI-Generated Image Detection** for releasing their implementation, which served as an important code reference for this project.
