@@ -1,0 +1,7 @@
+torch>=2.3.0
+torchvision
+timm
+numpy
+Pillow
+scikit-learn
+tensorboard
